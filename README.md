@@ -1,1 +1,0 @@
-# 4.0-Technologies-and-Sustainability-in-Corporate-Strategies
