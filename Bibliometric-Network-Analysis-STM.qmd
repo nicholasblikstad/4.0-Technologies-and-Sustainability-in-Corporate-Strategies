@@ -1,0 +1,512 @@
+---
+title: "BA-Part1"
+format: pdf
+editor: visual
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+```
+
+# Read bib file
+
+```{r}
+M <- bibliometrix::convert2df("1209_total.bib", dbsource= "isi", format = "bibtex")
+
+```
+
+## Identify NA e 2023 (early access) and filter
+
+```{r}
+cont_NA <- M %>%
+  count(PY)
+# 127 papers with publication year = 2023 and 90 NA
+
+M_filtered <- M %>%
+    filter(PY<=2022)
+```
+
+# Growth rate
+
+```{r}
+d <- M_filtered %>%
+  count(PY, sort = F, name = 'Papers') %>% 
+  arrange(PY) %>% 
+  mutate(trend = 1:n())
+
+d$lnp <- log(d$Papers) 
+
+```
+
+## Linear model
+
+```{r}
+m1 <- lm(lnp ~ trend, data = d)
+beta0 <- m1$coefficients[[1]] 
+beta1 <- m1$coefficients[[2]]
+
+```
+
+## Non linear model
+
+```{r}
+m2 <- nls(Papers ~ b0 * exp(b1 * (PY - 2016)), 
+          start = list(b0 = beta0, b1 = beta1), data = d)
+
+sjPlot::tab_model(m2, digits = 3) 
+
+rm(sjPlot)
+
+```
+
+## Growth rate
+
+```{r}
+growth <- (exp(0.431) - 1) * 100
+
+```
+
+## Absolute number of publications doubling time
+
+```{r}
+dt <- log(2) / (log(1 + (growth)/100))
+
+```
+
+# Descriptive bibliometric analysis
+
+```{r}
+results <- biblioAnalysis(M_filtered, sep=';')
+
+summary <- summary(results) 
+
+```
+
+# Networks creation: keyword co-occurrence
+
+## Remove search terms and find synonyms
+
+```{r}
+{r}
+remove.terms <- c("INDUSTRY 4.0","FRAMEWORK","STATE-OF-THE-ART", "REVIEW", "LITERATURE", "RESEARCH AGENDA", "CONTEXT")
+
+synonyms <- c("neural-network; neural-networks", "neural-network; convolutional neural-network", "neural-network; convolutional neural-networks", "supply chain; supply chain management", "fault diagnosis; fault detection", "big data; big data analytics", "technologies; technology", "systems; system")
+
+```
+
+## Conceptual Structure Map
+
+```{r}
+conceptual_structure <- conceptualStructure(M_filtered, method="MCA", field = "ID_TM", minDegree=10, stemming = TRUE, labelsize=5, remove.terms=remove.terms)
+
+```
+
+## Thematic Map
+
+```{r}
+thematicmap <- thematicMap(M_filtered, field = "ID", minfreq =10, stemming = TRUE, size = 0.5, repel = TRUE, remove.terms=remove.terms, synonyms=synonyms, n.labels=5)
+
+plot(thematicmap$map)
+
+```
+
+## Network creation
+
+### keywords co-occurrence with clusters
+
+```{r}
+keyword_matrix <- biblioNetwork(M_filtered, analysis = "co-occurrences", network = "keywords", sep = ";", remove.terms=remove.terms, synonyms=synonyms)
+
+graph_keyword_matrix <- networkPlot(keyword_matrix, n = 50, Title = "Keyword co-occurrence network", type = "fruchterman", labelsize=0.5, label.cex = TRUE, cluster="none", size=TRUE, size.cex = TRUE, remove.isolates = TRUE)
+
+cluster_graph_keyword_matrix <- networkPlot(keyword_matrix, n = 50, Title = "Keyword co-occurrence network", type = "fruchterman", labelsize=0.5, label.cex = TRUE, cluster="louvain", size=TRUE, size.cex = TRUE, remove.isolates = TRUE)
+
+```
+
+# keywords co-occurrence (documents)
+
+```{r}
+doc_keyword_matrix <- cocMatrix(M_filtered, Field = "DE", binary = T, remove.terms = remove.terms, synonyms = synonyms)
+
+sq_doc_keyword_matrix <- doc_keyword_matrix %*% t(doc_keyword_matrix)
+
+sq_doc_keyword_matrix |> 
+  igraph::graph_from_adjacency_matrix(mode = "undirected", weighted = NULL, diag = F) |>
+  igraph::simplify() |>
+  tidygraph::as_tbl_graph() -> 
+  sq_doc_keyword_matrix_graph
+
+sq_doc_keyword_matrix_graph |>
+  tidygraph::activate(nodes) |>
+  dplyr:: mutate(Index = row_number()) ->
+  sq_doc_keyword_matrix_graph
+
+  ggraph(sq_doc_keyword_matrix_graph, layout = "fr") +
+  geom_edge_link(aes(size = 0.05)) +
+  geom_node_point() +
+  geom_node_text(aes(label = name), vjust = -1) +
+  theme_void()
+
+```
+
+## Giant component
+
+```{r}
+gcc <- getgcc(sq_doc_keyword_matrix_graph)
+
+```
+
+## Clusterization
+
+```{r}
+louvain <- cluster_louvain(gcc)
+
+```
+
+## Clusters visualization
+
+```{r}
+membership_louvain <- membership(louvain)
+
+node_groups <- as.factor(membership_louvain)
+
+layout <- layout_with_fr(gcc)
+
+plot (comp, layout = layout, vertex.color = membership_louvain, vertex.label = NA, group = membership_louvain)
+
+ggraph(gcc, layout = layout) +
+  geom_edge_link(aes(size = 0.05), color = "white") +
+  geom_node_point(aes(color = node_groups)) +
+  geom_node_text(aes(label = NA)) +
+  theme_void()
+
+```
+
+## Clusters dataframe
+
+```{r}
+clusters_louvain <- data.frame(Node = V(gcc)$name, Cluster = as.numeric(membership_louvain))
+
+sum_clusters_louvain <- clusters_louvain %>% 
+  group_by(Cluster) %>% 
+  summarise(n = n())
+
+```
+
+## Join M_Filtered and clusters data frame
+
+```{r}
+M_filtered_cluster <- left_join(M_filtered, clusters, by = "Index")
+
+```
+
+## Filter by cluster
+
+```{r}
+desc_cluster1 <- filter(M_filtered_cluster, Cluster == 1)
+desc_cluster2 <- filter(M_filtered_cluster, Cluster == 2)
+desc_cluster3 <- filter(M_filtered_cluster, Cluster == 3)
+desc_cluster4 <- filter(M_filtered_cluster, Cluster == 4)
+desc_cluster5 <- filter(M_filtered_cluster, Cluster == 5)
+
+```
+
+## Descriptive analysis by cluster
+
+```{r}
+results1 <- biblioAnalysis(desc_cluster1, sep=';')
+results2 <- biblioAnalysis(desc_cluster2, sep=';')
+results3 <- biblioAnalysis(desc_cluster3, sep=';')
+results4 <- biblioAnalysis(desc_cluster4, sep=';')
+results5 <- biblioAnalysis(desc_cluster5, sep=';')
+
+
+summary1 <- summary(results1)
+summary2 <- summary(results2) 
+summary3 <- summary(results3) 
+summary4 <- summary(results4) 
+summary5 <- summary(results5) 
+
+```
+
+# Network creation: local citation network
+
+```{r}
+matrix_ref <- cocMatrix(M_filtered_cluster, Field = "CR", sep = ";")
+
+totals <- colSums(matrix_ref)
+
+totals_ref_matrix <- rbind(matrix_ref, totals)
+totals_ref_matrix_2 <- as.data.frame(as.matrix(totals_ref_matrix))
+
+totals <- totals_ref_matrix_2[nrow(totals_ref_matrix_2), , drop = FALSE]
+transposed_totals <- t(totals)
+
+transposed_totals <- as(transposed_totals, "matrix")
+transposed_totals <- as.data.frame(transposed_totals)
+transposed_totals <- rownames_to_column(transposed_totals, var = "Index")
+
+remove(matrix_ref, totals_ref_matrix, totals)
+
+```
+
+## Manual identification of the 992 articles based on transposed_totals file
+
+## Read resulted file "index" and filter
+
+```{r}
+index <- read_excel("index.xlsx", col_names = TRUE)
+transposed_index <- t(index)
+colnames(transposed_index) <- transposed_index[1,]
+transposed_index <- as.data.frame(transposed_index)
+transposed_index <- transposed_index[-1,]
+
+colnames(transposed_index) <- colnames(totals_ref_matrix_2)
+totals_ref_matrix_3 <- rbind(totals_ref_matrix_2, transposed_index)
+
+t_totals_ref_matrix_3 <- t(totals_ref_matrix_3)
+t_totals_ref_matrix_3 <- as.data.frame(t_totals_ref_matrix_3)
+t_totals_ref_matrix_3$Index <- as.numeric(t_totals_ref_matrix_3$Index)
+filtered_t_totals_ref_matrix <- subset(t_totals_ref_matrix_3, Index > 0)
+
+filtered_totals_ref_matrix <- t(filtered_t_totals_ref_matrix)
+last_two_rows <- tail(filtered_totals_ref_matrix, 2)
+transposed_totals_2 <- t(last_two_rows)
+transposed_totals_2 <- as.data.frame(transposed_totals_2)
+transposed_totals_2$totals <- as.numeric(transposed_totals_2$totals)
+
+repeated_values <- transposed_totals_2$Index[duplicated(transposed_totals_2$Index)]
+
+result_df <- transposed_totals_2 %>%
+  group_by(Index) %>%
+  summarize(Sum_Totals = sum(totals))
+
+```
+
+## Get hubs
+
+```{r}
+result_df$Hub <- scale(result_df$Sum_Totals)
+
+```
+
+# STM
+
+## Importing data
+
+```{r}
+data <- read.xlsx("M_filtered_cluster_louvain.xlsx")
+
+```
+
+## Selecting columns of interest
+
+```{r}
+data <- data[, c("DE", "Cluster")] |> 
+  filter(!is.na(Cluster)) |> 
+  rename(documents = DE)
+
+sum(is.na(data$documents))
+
+```
+
+## Reconciling terms
+
+```{r}
+data$documents <- tolower(data$documents) 
+data$documents <- gsub("industry 4.0", "", data$documents)
+data$documents <- gsub("4.0 tecnology", "4.0_tecnology", data$documents)
+data$documents <- gsub("4.0 tecnologies", "4.0_tecnology", data$documents)
+data$documents <- gsub("4.0_tecnology", "", data$documents)
+
+data$documents <- gsub("internet of things", "iot", data$documents)
+data$documents <- gsub("internet-of-things", "iot", data$documents)
+data$documents <- gsub("supply chain", "supply_chain", data$documents)
+data$documents <- gsub("machine learning", "machine_learning", data$documents)
+data$documents <- gsub("circular economy", "circular_economy", data$documents)
+data$documents <- gsub("circular economics", "circular_economy", data$documents)
+data$documents <- gsub("big data", "big_data", data$documents)
+data$documents <- gsub("ai-", "artificial_intelligence ", data$documents)
+data$documents <- gsub(" ai ", " artificial_intelligence ", data$documents)
+data$documents <- gsub("artificial intelligence", "artificial_intelligence", data$documents)
+data$documents <- gsub("deep learning", "deep_learning", data$documents)
+data$documents <- gsub("digital twin", "digital_twin", data$documents)
+data$documents <- gsub("digital-twin", "digital_twin", data$documents)
+data$documents <- gsub("augmented reality", "augmented_reality", data$documents)
+data$documents <- gsub("cloud computing", "cloud_computing", data$documents)
+data$documents <- gsub("neural network", "neural_network", data$documents)
+data$documents <- gsub("intelligence manufactur", "intelligence_manufactur", data$documents)
+data$documents <- gsub("cyber.physical", "CPS", data$documents)
+data$documents <- gsub("cyber.physical.system", "CPS", data$documents)
+data$documents <- gsub("ccyber.physical.systems", "CPS", data$documents)
+data$documents <- gsub("cyber-physical", "CPS", data$documents)
+data$documents <- gsub("cyber-physical system", "CPS", data$documents)
+
+```
+
+## Treatment for text analysis
+
+```{r}
+data_tokens <- tokens(data$documents, what = "word",
+                      remove_numbers = TRUE,
+                      remove_punct = TRUE,
+                      remove_symbols = TRUE, 
+                      split_hyphens = TRUE)
+
+data_tokens <- tokens_tolower(data_tokens)
+
+ata_tokens <- tokens_select(data_tokens, 
+                             c(stopwords(), "systematic", "review", "literature", "research", 
+                               "study", "methodolog", "framework", "bibliometric"), 
+                             selection = "remove")
+
+data_tokens <- tokens_wordstem(data_tokens, language = "english")
+
+data_tokens_dfm <- dfm(data_tokens, tolower = FALSE)
+
+```
+
+## Convert to STM
+
+```{r}
+data_stm <-    convert(
+  data_tokens_dfm,
+  to = c("stm"),
+  docvars = data
+)
+
+```
+
+## Remove not frequent terms
+
+```{r}
+out <- prepDocuments(
+  data_stm$documents, 
+  data_stm$vocab,
+  data_stm$meta) 
+
+```
+
+## Model
+
+### Model Estimation
+
+```{r}
+stm <- stm(documents = out$documents, 
+           vocab = out$vocab, 
+           K = 5, 
+           prevalence = ~`Cluster`,
+           max.em.its = 30, 
+           data = out$meta, 
+           init.type = "Spectral"
+) 
+
+plot(stm, n=4)
+
+```
+
+### Extract words for each topic
+
+```{r}
+topic_words <- labelTopics(stm, n=10) 
+
+```
+
+### Convert the list of topic words to a dataframe
+
+```{r}
+df_topic_words <- as.data.frame(do.call(rbind, topic_words), stringsAsFactors = FALSE) |>
+  slice(1:6) |>
+  tibble::rownames_to_column(var = "x") |>
+  tibble::rownames_to_column(var = "topic") |>
+  select(-x)
+
+```
+
+### Table of each topic's proportion
+
+```{r}
+perc_topics_main_term <- as.data.frame(colSums(stm$theta/nrow(stm$theta))) |>
+  tibble::rownames_to_column(var = "topic") |>
+  rename(proportion = 2) |>
+  mutate(proportion = round(proportion*100,1)) |>
+  left_join(df_topic_words, by = 'topic')
+
+```
+
+### Main documents of each topic
+
+#### Index and document
+
+```{r}
+document_index <- as.data.frame(out$meta$documents, sep=';') |>
+  tibble::rownames_to_column(var = "index") |>
+  mutate(index = as.character(index)) |>
+  rename(document = 2)
+
+```
+
+#### Index and cluster
+
+```{r}
+cluster_index <- as.data.frame(out$meta$Cluster, sep=';') |>
+  tibble::rownames_to_column(var = "index") |>
+  mutate(index = as.character(index)) |>
+  rename(cluster = 2)
+
+```
+
+##### Join
+
+```{r}
+perc_doc_topic <- make.dt(stm, meta = NULL) |>
+  rename(index = 1) |>
+  mutate(index = as.character(index)) |>
+  left_join(document_index, by = 'index') |>
+  left_join(cluster_index, by = 'index')
+
+rm(document_index)
+rm(cluster_index)
+
+```
+
+### Count occurrences of a term
+
+```{r}
+term_n <- as.data.frame(stm$settings$dim$wcounts[2]) |>
+  tibble::rownames_to_column(var = "index")
+
+term_descriptive_analysis <- as.data.frame(stm$vocab) |>
+  tibble::rownames_to_column(var = "index") |>
+  left_join(term_n, by ='index')
+
+rm(term_n)
+
+```
+
+##Visualization
+
+```{r}
+stm_topics <- tidy(stm)
+
+top_terms <- stm_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 5)%>% 
+  ungroup() %>%
+  arrange(topic, -beta) %>%
+  mutate(term = reorder(term, beta)) %>%
+  mutate(topic = paste("Topic ", topic)) %>%
+  ggplot(aes(term, beta, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  theme_classic() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme( strip.background = element_blank())+
+  scale_fill_brewer(palette = "Pastel2") +
+  coord_flip()
+
+plot(top_terms)
+
+```
